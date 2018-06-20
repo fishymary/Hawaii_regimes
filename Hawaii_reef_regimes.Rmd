@@ -1,0 +1,1634 @@
+---
+title: Combining fish and benthic communities into multiple regimes reveals complex reef dynamics
+output: 
+  rmarkdown::html_document:
+    theme: sandstone
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+####*Analysis by Mary K. Donovan*  
+Contact: marykdonovan@gmail.com
+
+Supplementary material for:  
+*Donovan MK, Friedlander AM, Lecky J, Jouffray JB, Williams GJ, Wedding LM, Crowder LB, Erickson A, Graham NAJ, Gove JM, Kappel CV, Karr K, Kittinger JN, Norström AV, Nyström M, Oleson KL, Stamoulis KA, White C, Williams ID, Selkoe KA. Combining fish and benthic communities into multiple regimes reveals complex reef dynamics. Scientific Reports*
+
+## Initialization
+The data is hosted in an online repository at http://datadryad.org, and the data can be accessed with the rdryad package or by visiting the website
+```{r initialization, message=FALSE}
+data <- read.csv(file.path(getwd(),'data','Hawaii_regimes.csv'))
+# data <- download_url("xxx")
+
+data_time <- read.csv(file.path(getwd(),'data','Hawaii_regime_timeseries.csv'))
+# data_time <- download_url("xxx")
+
+drivers <- read.csv(file.path(getwd(),'data','Hawaii_regime_drivers.csv'))
+# drivers <- download_url("xxx")
+
+library(mclust) # v5.3
+library(plyr) # v1.8.4
+library(vegan) # v5.3
+library(reshape2) # v1.4.2
+library(plotrix) # v3.6.6
+library(Hmisc) # v4.0.3
+library(rjags) # v4.6
+library(wesanderson) # v0.3.6.9000
+library(parallel) # v3.4.1
+```
+
+## Data transformation
+Scale each variable to range from 0 to 1:
+```{r}
+myscale <- function(x) {(x - min(x, na.rm=TRUE))/(max(x,na.rm=TRUE) - 
+                                                 min(x, na.rm=TRUE))}
+data.r <- as.data.frame(lapply(data[c('Coral','Macro','Other','Turf','CCA','Browsers','Grazers','Scrapers','Predators','SecConsumers')], myscale)) 
+```
+  
+Fourth-root transform each variable:
+```{r}
+data.r <- sqrt(sqrt(data.r))
+```
+
+## Model based clustering  
+Use model-based clustering with the `mclust` package to identify regimes.  
+
+The first step is to fit clusters for multiple model types, and select the best model using model selection and the number of clusters approximated with Bayes factors and Bayesian Information Criterion:
+```{r}
+regmod <- mclustBIC(data.r,prior=priorControl())
+plot(regmod)
+summary(regmod, data=data.r)
+```
+Based on this this plot, find the optimal number of clusters and the model type, based on the maximum BIC, and use this to plug into the final model fit.
+```{r}
+regmod_final <- Mclust(data.r,prior=priorControl(),G=5,modelNames=c("VVV"))
+summary(regmod_final,parameters=F)
+```
+
+## Plot in multivariate space
+Plot in multidimensional space using `metaMDS` function in `vegan` package to visualize regimes:
+```{r, message=FALSE, warnings=FALSE}
+# create a dataframe that stores the results
+temp <- cbind(data.r, "clust"= regmod_final$classification,"uncert"=regmod_final$uncertainty)
+clustgrp <- data.frame("clust"=c(1,2,3,4,5),"regime"=c(2,3,1,5,4)) #renumber the regimes
+temp <- join(temp, clustgrp,by='clust')
+temp$uncert_1 <- 1-temp$uncert # transform uncertainty
+
+# vegan mds fuction
+mds_x <- suppressMessages(metaMDS(data.r,autotransform=F,k=2,trymax=5,trace=0))
+# actual run was with trymax=50, setting to lower number for faster rendering of rmarkdown
+
+# set up colors for plot
+colvec <- c("orange","green","dodgerblue","yellow","magenta")
+ct <- 100
+colvec_trans <- c(rgb(255,165,0,ct,max=255),rgb(0,255,0,ct,max=255),rgb(30,144,255,ct,max=255),rgb(255,255,0,ct,max=255),rgb(255,0,255,ct,max=255))
+
+# plot
+par(mfrow=c(1,2),mar=c(0,0,0,0))
+plot(mds_x,type="n",xlim=c(-1,.77),ylim=c(-.6,1),xaxt="n",yaxt="n",xlab="",ylab="",bty="n")
+points(mds_x,display="sites",cex=(temp$uncert_1^1.2)*0.7,col=colvec[temp$clust],bg=colvec_trans[temp$clust],pch=21,lwd=0.1) 
+for(i in c(5,2,1,3,4)) ordiellipse(mds_x, groups=temp$clust, show.groups=i, col=colvec[i],lwd=2, conf=.50)
+text(-.9,.8,"a",cex=1)
+text(0.19655553+.06,-0.06758782-0.06,"2",cex=1.1,font=1)
+text(-0.29963102-.04,-0.06718082-.05,"1",cex=1.1,font=1)
+text(0.04289366,-0.06607040-0.02,"3",cex=1.1,font=1)
+text(0.07874599,0.04615998,"5",cex=1.1,font=1)
+text(0.01396763,0.15545153+0.06,"4",cex=1.1,font=1)
+
+plot(mds_x,type="n",xlim=c(-.5,.57),ylim=c(-.5,.9),xaxt="n",yaxt="n",xlab="",ylab="",bty="n")
+for(i in c(5,2,1,3,4)) ordiellipse(mds_x, groups=temp$clust, show.groups=i, col=colvec[i],lwd=2, conf=.50)
+reg.arrow <- scores(mds_x,choices=1:3,display="sp",scaling=2)
+arrows(0,0,reg.arrow[,1],reg.arrow[,2],length=0,lty=1,cex=3,lwd=1.5,col="black")
+colnames(temp)[c(7:11)] <- c("Browsers","Grazers","Scrapers","Predators","SC")
+text(0.15822316+0.03 ,0.08145200+.05,"Coral",font=2,cex=0.7)
+text(-0.30281789-0.13,-0.01094597,"Macro",font=2,cex=0.7)
+text(-0.28636879-.05,0.36413499+.07,"Other",font=2,cex=0.7)
+text(-0.12292336,-0.16294542-0.03,"Turf",font=2,cex=0.7)
+text(0.08508690+0.01,-0.13404772-0.04,"CCA",font=2,cex=0.7)
+text(0.29004490+0.08, -0.20112700-0.02,"Browsers",font=2,cex=0.7)
+text(0.17544408+0.15,-0.04426472-0.01,"Grazers",font=2,cex=0.7)
+text(0.34681479+0.18 ,0.06135945,"Scrapers",font=2,cex=0.7)
+text(0.34032304+0.18,0.10817131+0.02,"Predators",font=2,cex=0.7)
+text(0.07699135+0.3,-0.02065685+0.025,"Sec. Cons.",font=2,cex=0.7)
+text(-.6,.735,"b",cex=1)
+
+```
+  
+Note the size of the points in the MDS were made proportional to the uncertainty of the point's assignment to a given regime using `cex=(temp$uncert_1^1.2)*1` in the `points` function.
+
+```{r,echo=FALSE}
+# code used to produce the plot in the manuscript output as TIFF
+# tiff(file=file.path(getwd,'outputs',"Fig1.tiff"),height=2.5,width=5.5,res=600,compression="lzw",units="in")
+# par(mfrow=c(1,2),mar=c(0.5,0,0,0))
+# 
+# temp <- cbind(data.r, "clust"= regmod_final$classification,"uncert"=regmod_final$uncertainty)
+# clustgrp <- data.frame("clust"=c(1,2,3,4,5),"regime"=c(2,3,1,5,4)) #renumber the regimes
+# temp <- join(temp, clustgrp,by='clust')
+# temp$uncert_1 <- 1-temp$uncert
+# 
+# plot(mds_x,type="n",xlim=c(-1,.77),ylim=c(-.6,1),xaxt="n",yaxt="n",xlab="",ylab="",bty="n")
+# points(mds_x,display="sites",cex=(temp$uncert_1^1.2)*0.7,col=colvec[temp$clust],bg=colvec_trans[temp$clust],pch=21,lwd=0.1) 
+# for(i in c(5,2,1,3,4)) ordiellipse(mds_x, groups=temp$clust, show.groups=i, col=colvec[i],lwd=2, conf=.50)
+# text(-.9,.8,"a",cex=1)
+# text(0.19655553+.06,-0.06758782-0.06,"2",cex=1.1,font=1)
+# text(-0.29963102-.04,-0.06718082-.05,"1",cex=1.1,font=1)
+# text(0.04289366,-0.06607040-0.02,"3",cex=1.1,font=1)
+# text(0.07874599,0.04615998,"5",cex=1.1,font=1)
+# text(0.01396763,0.15545153+0.06,"4",cex=1.1,font=1)
+# 
+# plot(mds_x,type="n",xlim=c(-.5,.57),ylim=c(-.5,.9),xaxt="n",yaxt="n",xlab="",ylab="",bty="n")
+# for(i in c(5,2,1,3,4)) ordiellipse(mds_x, groups=temp$clust, show.groups=i, col=colvec[i],lwd=2, conf=.50)
+# reg.arrow <- scores(mds_x,choices=1:3,display="sp",scaling=2)
+# arrows(0,0,reg.arrow[,1],reg.arrow[,2],length=0,lty=1,cex=3,lwd=1.5,col="black")
+# colnames(temp)[c(7:11)] <- c("Browsers","Grazers","Scrapers","Predators","SC")
+# text(0.15822316+0.03 ,0.08145200+.05,"Coral",font=2,cex=0.7)
+# text(-0.30281789-0.13,-0.01094597,"Macro",font=2,cex=0.7)
+# text(-0.28636879-.05,0.36413499+.07,"Other",font=2,cex=0.7)
+# text(-0.12292336,-0.16294542-0.03,"Turf",font=2,cex=0.7)
+# text(0.08508690+0.01,-0.13404772-0.04,"CCA",font=2,cex=0.7)
+# text(0.29004490+0.08, -0.20112700-0.02,"Browsers",font=2,cex=0.7)
+# text(0.17544408+0.15,-0.04426472-0.01,"Grazers",font=2,cex=0.7)
+# text(0.34681479+0.18 ,0.06135945,"Scrapers",font=2,cex=0.7)
+# text(0.34032304+0.18,0.10817131+0.02,"Predators",font=2,cex=0.7)
+# text(0.07699135+0.3,-0.02065685+0.025,"Sec. Cons.",font=2,cex=0.7)
+# text(-.6,.735,"b",cex=1)
+# 
+# dev.off()
+```
+
+## Multivariate dispersion
+Calculate multivariate dispersion to test multivariate homogeneity of group dispersion:
+```{r}
+bd <- betadisper(dist(data.r),temp$regime)
+bd
+permutest(bd,pairwise=T)
+```
+
+## Sensitivity to depth
+Repeat above analysis for multiple depth bins and compare results:
+```{r}
+# less than 20m
+depth.sub.l20 <- data[data$Depth_m <=20 | is.na(data$Depth_m),] # subset data
+data.120.r <- as.data.frame(lapply(depth.sub.l20[c('Coral','Macro','Other','Turf','CCA','Browsers','Grazers','Scrapers','Predators','SecConsumers')], myscale)) # scale 
+data.120.r <- sqrt(sqrt(data.120.r)) # transform
+regmod_l20 <- Mclust(data.120.r,prior=priorControl(),G=5,modelNames=c("VVV")) # cluster
+
+temp <- cbind(data[data$Depth_m <=20 | is.na(data$Depth_m),], 'clust'=regmod_l20$classification) # save results for plot
+clustgrp.l20 <- data.frame('clust'=c(1,2,3,4,5),'regime'=c(1,3,2,5,4)) # match with regime numbers
+temp <- join(temp[c('Coral','Macro','Other','Turf','CCA','Browsers','Grazers','Scrapers','Predators','SecConsumers','clust')], clustgrp.l20, by='clust'); temp$id <- seq(1:nrow(temp))
+reg.l20.result <- melt(temp, id=c('id','clust','regime'))
+reg.l20.result <- ddply(reg.l20.result,.(regime,variable),summarise,'mean'=mean(value),'sd'=sd(value),'n'=length(variable))
+rl20.mean <- dcast(reg.l20.result, regime~variable,value.var='mean')
+rl20.sd <- dcast(reg.l20.result, regime~variable,value.var='sd')
+
+# 5m to 20m
+depth.sub.5_20 <- data[data$Depth_m <=20 & data$Depth_m >= 5 | is.na(data$Depth_m),]
+data.5_20.r <- as.data.frame(lapply(depth.sub.5_20[c('Coral','Macro','Other','Turf','CCA','Browsers','Grazers','Scrapers','Predators','SecConsumers')], myscale)) # scale 
+data.5_20.r <- sqrt(sqrt(data.5_20.r)) # transform
+regmod_5_20 <- Mclust(data.5_20.r,prior=priorControl(),G=5,modelNames=c("VVV")) # cluster
+
+temp <- cbind(data[data$Depth_m <=20 & data$Depth_m >= 5 | is.na(data$Depth_m),], 'clust'=regmod_5_20$classification) # save results for plot
+clustgrp.5_20 <- data.frame('clust'=c(1,2,3,4,5),'regime'=c(1,3,5,2,4)) # match with regime numbers
+temp <- join(temp[c('Coral','Macro','Other','Turf','CCA','Browsers','Grazers','Scrapers','Predators','SecConsumers','clust')], clustgrp.5_20, by='clust'); temp$id <- seq(1:nrow(temp))
+reg.5_20.result <- melt(temp, id=c('id','clust','regime'))
+reg.5_20.result <- ddply(reg.5_20.result,.(regime,variable),summarise,'mean'=mean(value),'sd'=sd(value),'n'=length(variable))
+r5_20.mean <- dcast(reg.5_20.result, regime~variable,value.var='mean')
+r5_20.sd <- dcast(reg.5_20.result, regime~variable,value.var='sd')
+
+# main result (0-30m)
+temp <- cbind(data, "clust"= regmod_final$classification)
+clustgrp <- data.frame("clust"=c(1,2,3,4,5),"regime"=c(3,1,2,5,4)) #renumber the regimes
+temp <- join(temp[c('Coral','Macro','Other','Turf','CCA','Browsers','Grazers','Scrapers','Predators','SecConsumers','clust')], clustgrp, by='clust'); temp$id <- seq(1:nrow(temp))
+reg.main.result <- melt(temp, id=c('id','clust','regime'))
+reg.main.result <- ddply(reg.main.result,.(regime,variable),summarise,'mean'=mean(value),'sd'=sd(value),'n'=length(variable))
+rm.mean <- dcast(reg.main.result, regime~variable,value.var='mean')
+rm.sd <- dcast(reg.main.result, regime~variable,value.var='sd')
+```
+
+```{r,echo=FALSE,message=FALSE}
+# plot
+par(mfcol=c(5,2),mar=c(1,4.5,1,1),oma=c(4,0,0,0),mgp=c(2,.7,0))
+for(r in 1:2){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.075,dat[dat$regime==r,2:6],pch=19,col='black',ylim=c(0,100),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T)
+  text(0.75,85,paste('Regime',r),pos=4,cex=1.5)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,2:6],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,2:6],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='blue')
+  
+}
+for(r in 3){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.075,dat[dat$regime==r,2:6],pch=19,col='black',ylim=c(0,100),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="Cover (%)",cex.lab=1.5)
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T)
+  text(0.75,85,paste('Regime',r),pos=4,cex=1.5)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,2:6],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,2:6],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='blue')
+  
+}
+for(r in 4){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.075,dat[dat$regime==r,2:6],pch=19,col='black',ylim=c(0,100),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T)
+  text(0.75,85,paste('Regime',r),pos=4,cex=1.5)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,2:6],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,2:6],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='blue')
+  
+}
+
+for(r in 5){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.075,dat[dat$regime==r,2:6],pch=19,col='black',ylim=c(0,100),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=c('Coral','Macro','Other','Turf',"Calg"),cex.axis=1.5)
+  plotCI(seq(1:5)-0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T)
+  text(0.75,85,paste('Regime',r),pos=4,cex=1.5)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,2:6],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,2:6],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,2:6],ui=dat[dat$regime==r,2:6]+dat.sd[dat.sd$regime==r,2:6],li=dat[dat$regime==r,2:6]-dat.sd[dat.sd$regime==r,2:6],add=T,col='blue')
+  
+}
+
+
+for(r in 1){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.05,dat[dat$regime==r,7:11],pch=19,col='black',ylim=c(0,90),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.05,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,7:11],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,7:11],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='blue')
+  
+}
+legend('topright',legend=c('0-30m','0-20m','5-20m'),col=c('black','red','blue'),lwd=2,pch=19,bty="n",cex=1.2)
+
+for(r in 2){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.05,dat[dat$regime==r,7:11],pch=19,col='black',ylim=c(0,90),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.05,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T)
+
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,7:11],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='red')
+
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,7:11],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='blue')
+  
+}
+
+for(r in 3){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.05,dat[dat$regime==r,7:11],pch=19,col='black',ylim=c(0,90),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab=expression("Biomass"~~bgroup("(",'g '*m^{-2},")")),cex.lab=1.5)
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.05,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,7:11],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,7:11],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='blue')
+  
+}
+
+for(r in 4){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.05,dat[dat$regime==r,7:11],pch=19,col='black',ylim=c(0,90),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=rep("",5))
+  plotCI(seq(1:5)-0.05,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,7:11],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,7:11],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='blue')
+  
+}
+
+for(r in 5){
+  dat=rm.mean
+  dat.sd=rm.sd
+  plot(seq(1:5)-0.05,dat[dat$regime==r,7:11],pch=19,col='black',ylim=c(0,90),xlim=c(0.9,5.1),xaxt="n",cex.axis=1.2,ylab="")
+  axis(1, at=seq(1:5), labels=c('Browsers','Grazers','Scrapers','Predators','Sec Cons'),cex.axis=1.5)
+  plotCI(seq(1:5)-0.05,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T)
+  
+  dat=rl20.mean
+  dat.sd=rl20.sd
+  points(seq(1:5),dat[dat$regime==r,7:11],pch=19,col='red')
+  plotCI(seq(1:5),dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='red')
+  
+  dat=r5_20.mean
+  dat.sd=r5_20.sd
+  points(seq(1:5)+0.075,dat[dat$regime==r,7:11],pch=19,col='blue')
+  plotCI(seq(1:5)+0.075,dat[dat$regime==r,7:11],ui=dat[dat$regime==r,7:11]+dat.sd[dat.sd$regime==r,7:11],li=dat[dat$regime==r,7:11]-dat.sd[dat.sd$regime==r,7:11],add=T,col='blue')
+  
+}
+```
+
+## Regime summary
+Calculate summaries, and explore patterns of Depth, habitat, wave exposure across regimes:
+```{r}
+# main content of Table 1
+ddply(data, .(regime), summarise, 
+      'Coral'=mean(Coral),
+      'Macro'=mean(Macro),
+      'Other'=mean(Other),
+      'Turf'=mean(Turf),
+      'CCA'=mean(CCA),
+      'Browsers'=mean(Browsers),
+      'Grazers'=mean(Grazers),
+      'Scrapers'=mean(Scrapers),
+      'Predators'=mean(Predators),
+      'SecConsumers'=mean(SecConsumers),
+      'Num_Sites'=length(regime),
+      'Complexity'=mean(Complexity,na.rm=T),
+      'Depth_m'=mean(Depth_m,na.rm=T))
+
+# patterns across exposure
+temp <- ddply(data,.(regime,Exposure),'nrow')
+temp <- dcast(temp, regime~Exposure,value.var='nrow')
+temp[2:5] <- temp[2:5]/rowSums(temp[2:5])
+
+# patterns across depth
+summary(lm(Depth_m~as.factor(regime),data=data))
+TukeyHSD(aov(Depth_m~as.factor(regime),data=data))
+
+# patterns across complexity
+summary(lm(Complexity~as.factor(regime),data=data))
+TukeyHSD(aov(Complexity~as.factor(regime),data=data))
+
+# patterns across Islands
+temp <- ddply(data,.(regime,Island),'nrow')
+temp <- dcast(temp, regime~Island,value.var='nrow')
+temp[is.na(temp)] <- 0
+temp[2:9] <- temp[2:9]/colSums(temp[2:9])
+round(temp,2)
+```
+
+## Plot regime components as densities
+```{r}
+# set up dataframe of results to plot
+reg.split <- data[c('regime','Browsers','Grazers','Scrapers','SecConsumers','Predators','Macro','CCA','Other','Turf','Coral')]
+rsum <- melt(reg.split, id=1)
+rsum$value <- sqrt(sqrt(rsum$value))
+rsum <- ddply(rsum, .(regime,variable), summarise, "mean"=mean(value))
+rsum <- split(rsum, rsum$regime)
+reg.split <- split(reg.split, reg.split$regime)
+
+# set up colors for plot
+shade <- 90
+col.den2 <- c(
+  rgb(138,43,226,shade,max=255), #Browser: blueviolet
+  rgb(238,130,238,shade,max=255), #Grazer: violet
+  rgb(70,130,180,shade,max=255),  #Scraper: steelblue
+  rgb(169,169,169,shade,max=255), #SecCons: darkgrey
+  rgb(0,255,255,shade,max=255), #Preadtor: cyan
+  rgb(142,111,38,shade,max=255), #Macro: slate
+  rgb(255,0,255,shade,max=255), #CCA: magenta
+  rgb(255,255,0,shade,max=255),  #Other: light yellow
+  rgb(92,198,72,shade,max=255), #Turf: green
+  rgb(255,0,0,110,max=255) #Coral: orange-red
+)
+
+# plot
+pl <- c("Regime 1", "Regime 2", "Regime 3", "Regime 4", "Regime 5")
+par(mfcol=c(5,2), mar=c(1,1,1,1),oma=c(4,4,0,0))
+d <- density(reg.split[[1]]$Turf)
+plot(d,ylim=c(0,2.6),xlim=c(-1.15,3.5),main="",type="n",cex.axis=1.5,xaxt="n"); axis(1,labels=NA)
+for(k in 7:11){
+  x <- sqrt(sqrt(reg.split[[1]][,k]))
+  p <- density(x)
+  c <- k-1
+  polygon(p,col=col.den2[c])
+  arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+  arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+}
+text(-1.2,2.35,pl[1],pos=4,cex=1.5,font=2)
+legend(-1.3,2.25,legend=c("Macroalgae","CCA","Other cover","Turf","Coral"),pch=22,col="black",pt.bg=col.den2[6:10],pt.cex=3,bty="n",cex=1.2)
+
+for(i in 2:5){
+  d <- density(reg.split[[i]]$Turf)
+  plot(d,ylim=c(0,2.6),xlim=c(-1.15,3.5),main="",type="n",cex.axis=1.5,xaxt="n"); axis(1,labels=NA)
+  for(k in 7:11){
+    x <- sqrt(sqrt(reg.split[[i]][,k]))
+    p <- density(x)
+    c <- k-1
+    polygon(p,col=col.den2[c])
+    arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c]) 
+    arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+  }
+  text(-1.2,2.35,pl[i],pos=4,cex=1.5,font=2)
+}
+axis(1,cex.axis=1.5,at=c(-1,0,1,2,3),labels=c("",0,1,16,81))
+mtext("% Cover",side=1,outer=T,cex=1.3,at=0.25,line=1.7)
+
+#fish
+d <- density(reg.split[[1]]$Turf)
+plot(d,ylim=c(0,2.6),xlim=c(-1.1,4),main="",type="n",cex.axis=1.5,xaxt="n",yaxt="n"); axis(1,labels=NA); axis(2,labels=NA)
+for(k in 2:6){
+  x <- sqrt(sqrt(reg.split[[1]][,k]))
+  p <- density(x)
+  c <- k-1
+  polygon(p,col=col.den2[c])
+  arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c]) 
+  arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+}
+legend(2.8,2.25,legend=c("Browsers","Grazers","Scrapers","Sec. Cons.","Piscivores"),pch=22,col="black",pt.bg=col.den2[1:5],pt.cex=3,bty="n",cex=1.2)
+
+for(i in 2:5){
+  d <- density(reg.split[[i]]$Turf)
+  plot(d,ylim=c(0,2.6),xlim=c(-1.1,4),main="",type="n",cex.axis=1.5,xaxt="n",yaxt="n"); axis(1,labels=NA); axis(2,labels=NA)
+  for(k in 2:6){
+    x <- sqrt(sqrt(reg.split[[i]][,k]))
+    p <- density(x)
+    c <- k-1
+    polygon(p,col=col.den2[c])
+    arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])    
+    arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])      
+  }
+  #   text(-1.2,2.35,pl[i],pos=4,cex=1.5,font=2)
+}
+axis(1,cex.axis=1.5,at=c(-1,0,1,2,3,4),labels=c("",0,1,16,81,""))
+
+mtext(expression("Biomass"~~bgroup("(",'g '*m^{-2},")")),side=1,outer=T,cex=1.3,at=0.75,line=2.5)
+mtext("Density",side=2,outer=T,cex=1.3,line=1.5)
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# tiff(file=file.path(getwd(),'outputs',"Fig2.tiff",height=9,width=9,res=300,compression="lzw",units="in")
+# pl <- c("Regime 1", "Regime 2", "Regime 3", "Regime 4", "Regime 5")
+# par(mfcol=c(5,2), mar=c(1,1,1,1),oma=c(4,4,0,0))
+# d <- density(reg.split[[1]]$Turf)
+# plot(d,ylim=c(0,2.6),xlim=c(-1.15,3.5),main="",type="n",cex.axis=1.5,xaxt="n"); axis(1,labels=NA)
+# for(k in 7:11){
+#   x <- sqrt(sqrt(reg.split[[1]][,k]))
+#   p <- density(x)
+#   c <- k-1
+#   polygon(p,col=col.den2[c])
+#   arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+#   arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+# }
+# text(-1.2,2.35,pl[1],pos=4,cex=1.5,font=2)
+# legend(-1.3,2.25,legend=c("Macroalgae","CCA","Other cover","Turf","Coral"),pch=22,col="black",pt.bg=col.den2[6:10],pt.cex=3,bty="n",cex=1.2)
+# 
+# for(i in 2:5){
+#   d <- density(reg.split[[i]]$Turf)
+#   plot(d,ylim=c(0,2.6),xlim=c(-1.15,3.5),main="",type="n",cex.axis=1.5,xaxt="n"); axis(1,labels=NA)
+#   # axis(1,at=sqrt(sqrt(pc)),labels=pc)
+#   for(k in 7:11){
+#     x <- sqrt(sqrt(reg.split[[i]][,k]))
+#     p <- density(x)
+#     c <- k-1
+#     polygon(p,col=col.den2[c])
+#     arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c]) 
+#     arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+#   }
+#   text(-1.2,2.35,pl[i],pos=4,cex=1.5,font=2)
+# }
+# axis(1,cex.axis=1.5,at=c(-1,0,1,2,3),labels=c("",0,1,16,81))
+# mtext("% Cover",side=1,outer=T,cex=1.3,at=0.25,line=1.7)
+# 
+# #fish
+# d <- density(reg.split[[1]]$Turf)
+# plot(d,ylim=c(0,2.6),xlim=c(-1.1,4),main="",type="n",cex.axis=1.5,xaxt="n",yaxt="n"); axis(1,labels=NA); axis(2,labels=NA)
+# for(k in 2:6){
+#   x <- sqrt(sqrt(reg.split[[1]][,k]))
+#   p <- density(x)
+#   c <- k-1
+#   polygon(p,col=col.den2[c])
+#   arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c]) 
+#   arrows(rsum[[1]][c,3],2.6,rsum[[1]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])
+# }
+# legend(2.8,2.25,legend=c("Browsers","Grazers","Scrapers","Sec. Cons.","Piscivores"),pch=22,col="black",pt.bg=col.den2[1:5],pt.cex=3,bty="n",cex=1.2)
+# 
+# for(i in 2:5){
+#   d <- density(reg.split[[i]]$Turf)
+#   plot(d,ylim=c(0,2.6),xlim=c(-1.1,4),main="",type="n",cex.axis=1.5,xaxt="n",yaxt="n"); axis(1,labels=NA); axis(2,labels=NA)
+#   for(k in 2:6){
+#     x <- sqrt(sqrt(reg.split[[i]][,k]))
+#     p <- density(x)
+#     c <- k-1
+#     polygon(p,col=col.den2[c])
+#     arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])    
+#     arrows(rsum[[i]][c,3],2.6,rsum[[i]][c,3],2.1,lwd=5,length=.1,col=col.den2[c])      
+#   }
+# }
+# axis(1,cex.axis=1.5,at=c(-1,0,1,2,3,4),labels=c("",0,1,16,81,""))
+# mtext(expression("Biomass"~~bgroup("(",'g '*m^{-2},")")),side=1,outer=T,cex=1.3,at=0.75,line=2.5)
+# mtext("Density",side=2,outer=T,cex=1.3,line=1.5)
+# dev.off()
+```
+
+## Temporal transition frequency
+Predict regime for each observation  
+```{r}
+# bind timeseries to bottom of data used to create regimes
+temp <- data_time[c("Coral","Macro","Other","Turf","CCA","Browsers","Grazers","Scrapers","Predators","SecConsumers")]
+temp <- rbind(data[c("Coral","Macro","Other","Turf","CCA","Browsers","Grazers","Scrapers","Predators","SecConsumers")],temp)
+temp <- as.data.frame(lapply(temp, myscale)) 
+temp <- sqrt(sqrt(temp))
+
+# use predict function from mclust
+time.pred <- predict(regmod_final, newdata=temp[1028:nrow(temp),])
+```
+
+Retain predictions with greater than 95% confidence
+```{r}
+tl <- as.data.frame(time.pred)
+tl$z.1[tl$z.1 < 0.95] <- 0
+tl$z.1[tl$z.1 >= 0.95] <- 1
+tl$z.2[tl$z.2 < 0.95] <- 0
+tl$z.2[tl$z.2 >= 0.95] <- 2
+tl$z.3[tl$z.3 < 0.95] <- 0
+tl$z.3[tl$z.3 >= 0.95] <- 3
+tl$z.4[tl$z.4 < 0.95] <- 0
+tl$z.4[tl$z.4 >= 0.95] <- 4
+tl$z.5[tl$z.5 < 0.95] <- 0
+tl$z.5[tl$z.5 >= 0.95] <- 5
+tl$sm <- rowSums(tl[2:6])
+tl$c <- ifelse(tl$classification==tl$sm,1,0)
+```
+
+Calucalate transition frequency  
+```{r}
+tld <- cbind(data_time, clust=tl$classification, c=tl$c)
+tld <- subset(tld, c==1) # removes predictions < 95%
+
+# remove sites that don't have at least 3 years after the confidence threshold applied
+temp <- ddply(tld, .(repID_ts), summarise, 'nYr'=length(unique(Year)))
+temp <- subset(temp, nYr > 2)
+tld <- tld[tld$repID_ts %in% temp$repID_ts,]
+clustgrp <- data.frame("clust"=c(1,2,3,4,5),"regime"=c(3,1,2,5,4)) #renumber the regimes
+tld <- join(tld,clustgrp,by='clust')
+
+# create a dataframe where gap years are removed
+tlw <- dcast(tld, repID_ts~Year,value.var="regime")
+tm <- melt(tlw, id=c(1))
+tm <- tm[c('repID_ts','variable','value')]
+tm <- tm[!is.na(tm$value),]
+tm$repID_ts <- as.factor(tm$repID_ts)
+ot <- data.frame(repID_ts=NA,variable=NA,value=NA,s=NA)
+for(i in 1:length(levels(tm$repID_ts))){
+  temp <- tm[tm$repID_ts==levels(tm$repID_ts)[i],]
+  temp$s <- seq(1:nrow(temp))
+  ot <- rbind(ot,temp)
+}
+tmd <- dcast(ot, repID_ts~s, value.var='value')
+tmd <- tmd[!is.na(tmd$repID_ts),]
+
+# break down dataframe to include row for every transition
+t.each <- data.frame(repID_ts=NA,Rs=NA,Re=NA)
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`1`[i],tmd$`2`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`2`[i],tmd$`3`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`3`[i],tmd$`4`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`4`[i],tmd$`5`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`5`[i],tmd$`6`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`6`[i],tmd$`7`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`7`[i],tmd$`8`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`8`[i],tmd$`9`[i]))
+for(i in 1:nrow(tmd)) t.each <- rbind(t.each,c(tmd$repID_ts[i],tmd$`9`[i],tmd$`10`[i]))
+t.each <- t.each[!is.na(t.each$repID_ts),]
+t.each <- t.each[!is.na(t.each$Rs),]
+t.each <- t.each[!is.na(t.each$Re),]
+
+# create empty dataframe to store results that includes each transition possibilty
+trans <- data.frame(Rs=c(1,2,3,4,5,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5),Re=c(1,2,3,4,5,2,3,4,5,1,3,4,5,1,2,4,5,1,2,3,5,1,2,3,4),nT=rep(NA,25))
+
+# fill in counts for each transition possiblity
+for(r in 1:5){
+  for(e in 1:5){
+    tramp <- rep(F,nrow(t.each))
+    tramp[t.each[,'Rs']==r & t.each[,'Re']==e] <- T
+    trans$nT[trans$Rs==r & trans$Re==e] <- length(tramp[tramp==T])
+  }
+}
+sum(trans$nT) # total number of observed transitions
+
+trans$prop <- trans$nT/sum(trans$nT) # convert to proportion
+round(dcast(trans, Rs~Re, value.var='prop'),2) # transition matrix
+```
+
+Plot heatmap  
+```{r}
+temp <- dcast(trans, Rs~Re, value.var='nT')
+temp <- temp[,2:6]
+ctm <- colorRampPalette(c("white","red"))
+
+heatmap(as.matrix(t(sqrt(temp))),Rowv=NA,Colv=NA,scale="none",col=ctm(200),margins=c(2,2))
+```
+  
+*Note this plot is flipped to the right in the paper and the rest of the figure was constructed external to R.*
+
+## Sensitivity to number of years
+```{r}
+# create dataframe with counts for number of years at each site
+ts.long <- ddply(data_time, .(repID_ts),summarise, "nYr"=length(unique(Year)), "min"=min(Year), "max"=max(Year))
+
+# binomial confidence intervals for main result
+tmf.all.conf <- binconf(trans$nT,n=311,alpha=0.05)
+
+# redo result with timeseries greater than 4 years long
+trans.long <- data.frame(Rs=c(1,2,3,4,5,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5),Re=c(1,2,3,4,5,2,3,4,5,1,3,4,5,1,2,4,5,1,2,3,5,1,2,3,4),nT=rep(NA,25))
+t.each.long <- subset(ts.long, nYr > 4)
+t.each.long <- t.each[t.each$repID_ts %in% t.each.long$repID_ts,]
+for(r in 1:5){
+  for(e in 1:5){
+    tramp <- rep(F,nrow(t.each.long))
+    tramp[t.each.long[,'Rs']==r & t.each.long[,'Re']==e] <- T
+    trans.long$nT[trans.long$Rs==r & trans.long$Re==e] <- length(tramp[tramp==T])
+  }
+}
+tmf.long.conf <- binconf(trans.long$nT,n=sum(trans.long$nT),alpha=0.05)
+
+# redo result with timeseries greater than 6 years long
+trans.longer <- data.frame(Rs=c(1,2,3,4,5,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5),Re=c(1,2,3,4,5,2,3,4,5,1,3,4,5,1,2,4,5,1,2,3,5,1,2,3,4),nT=rep(NA,25))
+t.each.longer <- subset(ts.long, nYr > 6)
+t.each.longer <- t.each[t.each$repID_ts %in% t.each.longer$repID_ts,]
+for(r in 1:5){
+  for(e in 1:5){
+    tramp <- rep(F,nrow(t.each.long))
+    tramp[t.each.longer[,'Rs']==r & t.each.longer[,'Re']==e] <- T
+    trans.longer$nT[trans.longer$Rs==r & trans.longer$Re==e] <- length(tramp[tramp==T])
+  }
+}
+tmf.longer.conf <- binconf(trans.longer$nT,n=sum(trans.longer$nT),alpha=0.05)
+
+# combine together for plot
+tmf.confs <- cbind(tmf.all.conf,tmf.long.conf,tmf.longer.conf)
+tmf.confs <- as.data.frame(tmf.confs)
+colnames(tmf.confs) <- c("pt.all","low.all","up.all","pt.long","low.long","up.long","pt.longer","low.longer","up.longer")
+rownames(tmf.confs) <- seq(1:25)
+
+#plot labels
+tmf.lab <- data.frame(Rs=c(1,2,3,4,5,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5),Re=c(1,2,3,4,5,2,3,4,5,1,3,4,5,1,2,4,5,1,2,3,5,1,2,3,4)); tmf.lab$lab <- paste(tmf.lab$Rs,tmf.lab$Re,sep=" - ")
+tmf.confs <- tmf.confs[c(1, 6, 7, 8, 9, 10, 2, 11, 12, 13, 14, 15, 3, 16, 17, 18, 19, 20, 4, 21, 22, 23, 24, 25, 5),]
+tmf.lab <- tmf.lab[c(1, 6, 7, 8, 9, 10, 2, 11, 12, 13, 14, 15, 3, 16, 17, 18, 19, 20, 4, 21, 22, 23, 24, 25, 5),]
+
+#plot
+par(mar=c(5,4,2,1))
+plot(seq(1:25), tmf.confs$pt.all,pch=19,ylim=c(-0.01,1),xaxt="n",ylab="Probability",xlab="Transition (from - to)")
+axis(1, at= seq(1:25)+0.07, labels= tmf.lab$lab,las=2)
+plotCI(seq(1:25), tmf.confs$pt.all, ui=tmf.confs$up.all,li=tmf.confs$low.all,add=T,pch=NA,sfrac=0.005)
+points(seq(1:25)+0.15, tmf.confs$pt.long,pch=19,col="red")
+plotCI(seq(1:25)+0.15, tmf.confs$pt.long, ui=tmf.confs$up.long,li=tmf.confs$low.long,add=T,pch=NA,col="red",sfrac=0.005)
+points(seq(1:25)+0.30, tmf.confs$pt.longer,pch=19,col="blue")
+plotCI(seq(1:25)+0.30, tmf.confs$pt.longer, ui=tmf.confs$up.longer,li=tmf.confs$low.longer,add=T,pch=NA,col="blue",sfrac=0.005)
+```
+  
+Summaries in the text
+```{r}
+temp <- subset(trans, Rs == 1)
+temp$prop1 <- temp$nT/sum(temp$nT)
+temp
+
+temp <- subset(trans, Rs == 2)
+temp$prop2 <- temp$nT/sum(temp$nT)
+temp
+
+temp <- subset(trans, Rs == 4)
+temp$prop4 <- temp$nT/sum(temp$nT)
+temp
+
+temp <- subset(trans, Rs == 5)
+temp$prop5 <- temp$nT/sum(temp$nT)
+temp
+```
+
+## Local and global impacts
+First step was to calculate new transition matrix that lowers the confidence threshold to maximize samples from after the bleaching event
+```{r}
+temp <- data.frame(tp=seq(0.05,0.95,by=0.01),n=rep(NA,length(seq(0.05,0.95,by=0.01))))
+for(z in 1:nrow(temp)){
+  tp <- temp$tp[z]
+  tl2 <- as.data.frame(time.pred)
+  tl2$z.1[tl2$z.1 < tp] <- 0
+  tl2$z.1[tl2$z.1 >= tp] <- 1
+  tl2$z.2[tl2$z.2 < tp] <- 0
+  tl2$z.2[tl2$z.2 >= tp] <- 2
+  tl2$z.3[tl2$z.3 < tp] <- 0
+  tl2$z.3[tl2$z.3 >= tp] <- 3
+  tl2$z.4[tl2$z.4 < tp] <- 0
+  tl2$z.4[tl2$z.4 >= tp] <- 4
+  tl2$z.5[tl2$z.5 < tp] <- 0
+  tl2$z.5[tl2$z.5 >= tp] <- 5
+  tl2$sm <- rowSums(tl2[2:6])
+  tl2$c <- ifelse(tl2$classification==tl2$sm,1,0)
+  
+  tld2 <- cbind(data_time, clust=tl2$classification, c=tl2$c)
+  tld2 <- subset(tld2, c==1)
+  tld2 <- join(tld2,clustgrp,by="clust")
+  # head(tld2)
+  
+  tlw2 <- dcast(tld2, repID_ts~Year,value.var="regime")
+  # head(tlw2)
+  for(i in 2:19){colnames(tlw2)[i] <- paste0('y',i)}
+  
+  temp[z,2] <- nrow(tlw2[!is.na(tlw2$y19),])
+  
+}
+
+plot(temp$tp,temp$n,type="o",ylab='n',xlab='confidence')
+abline(v=0.47)
+```
+  
+This plot shows how many samples will be available for the model across varying levels of confidence.
+  
+```{r}
+tp <- 0.46 #based on above plot
+tl2 <- as.data.frame(time.pred)
+tl2$z.1[tl2$z.1 < tp] <- 0
+tl2$z.1[tl2$z.1 >= tp] <- 1
+tl2$z.2[tl2$z.2 < tp] <- 0
+tl2$z.2[tl2$z.2 >= tp] <- 2
+tl2$z.3[tl2$z.3 < tp] <- 0
+tl2$z.3[tl2$z.3 >= tp] <- 3
+tl2$z.4[tl2$z.4 < tp] <- 0
+tl2$z.4[tl2$z.4 >= tp] <- 4
+tl2$z.5[tl2$z.5 < tp] <- 0
+tl2$z.5[tl2$z.5 >= tp] <- 5
+tl2$sm <- rowSums(tl2[2:6])
+tl2$c <- ifelse(tl2$classification==tl2$sm,1,0)
+
+tld2 <- cbind(data_time, clust=tl2$classification, c=tl2$c)
+tld2 <- subset(tld2, c==1)
+tld2 <- join(tld2,clustgrp,by="clust")
+
+tlw2 <- dcast(tld2, repID_ts~Year,value.var="regime")
+for(i in 2:19){colnames(tlw2)[i] <- paste0('y',i)}
+
+temp <- temp <- join(tlw2,drivers,by='repID_ts')
+temp <- temp[!is.na(temp$y19),]
+dat.dhw <- temp
+
+```
+
+Bayesian logistic regression Model
+```{r}
+# set up and define Bayesian logisitic regression
+cat('model{
+    # likelihood
+    for(i in 1:n){
+      p[i] <- ilogit(B0 + B1*x[i])
+      p.bound[i] <- max(0, min(1,p[i]))
+      y[i] ~ dbern(p.bound[i])
+      y.new[i] ~ dbern(p[i])
+    }
+    
+    # priors
+    B0 ~ dnorm(0,0.001)
+    B1 ~ dnorm(0,0.001)
+    
+    # predicted values
+    for(i in 1:length(x.new)){
+      y.pred[i] <- ilogit(B0 + B1*x.new[i])
+    }
+    
+    #posterior predictive checks
+    y.mean <- mean(y)
+    ynew.mean <- mean(y.new)
+    pval.mean <- step(y.mean-ynew.mean)
+    
+    sd.y <- sd(y)
+    sd.y.new <- sd(y.new)
+    pval.sd <- step(sd.y.new-sd.y)
+    
+    }',file='LogisitcJags_wPPC.R')
+```
+  
+Set up model inputs and outputs
+```{r}
+options <- data.frame(Rs=c(1,1,1,1,1,2,2,2,2,2,3,3,3,3,3,4,4,4,4,4,5,5,5,5,5),
+                      Re=c(1,2,3,4,5,1,2,3,4,5,1,2,3,4,5,1,2,3,4,5,1,2,3,4,5))
+
+gel.out.hpop <- data.frame('B0'=rep(NA,nrow(options)),'B1'=rep(NA,nrow(options)))
+ppc.out.hpop <- data.frame('mean'=rep(NA,nrow(options)),'sd'=rep(NA,nrow(options)))
+
+gel.out.dhw <- data.frame('B0'=rep(NA,nrow(options)),'B1'=rep(NA,nrow(options)))
+ppc.out.dhw <- data.frame('mean'=rep(NA,nrow(options)),'sd'=rep(NA,nrow(options)))
+
+n.adapt <- 5000; n.update <- 10000; n.iter <- 10000
+initFunc <- function(){return(list(list(B0=runif(1,0,1),B1=runif(1,0,1))))}
+
+dat.hpop <- join(t.each,drivers,by='repID_ts')
+dat.hpop$humanpop.l <- log(dat.hpop$humanpop+1)
+cent <- function(x){(x-min(x))/(max(x)-min(x))}
+dat.hpop$humanpop.l <- cent(dat.hpop$humanpop.l)
+x.new.hpop <- seq(from=min(dat.hpop$humanpop.l),to=max(dat.hpop$humanpop.l),length=100)
+
+
+gel.out.dhw <- data.frame('B0'=rep(NA,nrow(options)),'B1'=rep(NA,nrow(options)))
+ppc.out.dhw <- data.frame('mean'=rep(NA,nrow(options)),'sd'=rep(NA,nrow(options)))
+
+dat.dhw$dhw <- cent(dat.dhw$dhw)
+x.new.dhew <- seq(from=min(dat.dhw$dhw),to=max(dat.dhw$dhw),length=100)
+
+
+col.vec <- wes_palette(name="Darjeeling1",n=5)
+col.vec <- c(rgb(col2rgb(col.vec[1])[1,1],col2rgb(col.vec[1])[2,1],col2rgb(col.vec[1])[3,1],100,max=255),rgb(col2rgb(col.vec[2])[1,1],col2rgb(col.vec[2])[2,1],col2rgb(col.vec[2])[3,1],100,max=255),rgb(col2rgb(col.vec[3])[1,1],col2rgb(col.vec[3])[2,1],col2rgb(col.vec[3])[3,1],100,max=255),rgb(238,130,238,100,max=255))
+```
+  
+Fit models and plot together
+```{r}
+# example for the first transition (see .rmd for full figure code)
+for(k in 1:1){
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop)) # set up empty column
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1 # store result for transition of interest
+  # plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",xlab="",type="n",xaxt="n",cex.axis=1.2) # empty plot
+  # axis(1,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){ # run bayesian model if n > 3
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+    cl <- makeCluster(2) # run chains in parallel for increased speed
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd'),n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+    # save results of gelman diagnositics
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+    # save model summary results
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]])) # set up for plotting
+    # plot results
+    # polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+    # points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+}
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+par(mfrow=c(5,5),mar=c(1,1,1,1),oma=c(3,7,5,10),mgp=c(1.5,0.6,0))
+
+for(k in 1:1){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",xlab="",type="n",xaxt="n",cex.axis=1.2)
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 2:5){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",type="n",xaxt="n","yaxt"="n")
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  axis(2,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 6:6){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",xlab="",type="n",xaxt="n",cex.axis=1.2)
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 7:10){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",type="n",xaxt="n","yaxt"="n")
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  axis(2,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 11:11){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",xlab="",type="n",xaxt="n",cex.axis=1.2)
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 12:15){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",type="n",xaxt="n","yaxt"="n")
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  axis(2,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 16:16){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",xlab="",type="n",xaxt="n",cex.axis=1.2)
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 17:20){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",type="n",xaxt="n","yaxt"="n")
+  axis(1,at=c(0,0.5,1),labels=c('','',''))
+  axis(2,at=c(0,0.5,1),labels=c('','',''))
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 21:21){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",xlab="",type="n",xaxt="n",yaxt="n",cex.axis=1.2)
+  axis(1,at=c(0,0.5,1),labels=c(0,0.5,1),cex.axis=1.2)
+  axis(2,at=c(0,0.5,1),labels=c(0,0.5,1),cex.axis=1.2)
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+for(k in 22:25){
+  ####### Human Population
+  dat.hpop$tramp <- rep(0,nrow(dat.hpop))
+  dat.hpop$tramp[dat.hpop[,'Rs']==options[k,'Rs'] & dat.hpop[,'Re']==options[k,'Re']] <- 1
+  plot(dat.hpop$humanpop.l,dat.hpop$tramp,ylim=c(0,1),ylab="",type="n",xaxt="n",yaxt="n",cex.axis=1.2)
+  axis(1,at=c(0,0.5,1),labels=c(0,0.5,1),cex.axis=1.2)
+  axis(2,at=c(0,0.5,1),labels=c('','',''),cex.axis=1.2)
+  if(nrow(dat.hpop[dat.hpop$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.hpop),y=dat.hpop$tramp,x=dat.hpop$humanpop.l,x.new=x.new.hpop)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.hpop[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.hpop[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.hpop[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.hpop[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+
+    polygon(c(x.new.hpop,rev(x.new.hpop)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[1],border=NA)
+
+    points(x.new.hpop,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2)
+  }
+  ####### DHW
+  dat.dhw$tramp <- rep(0,nrow(dat.dhw))
+  for(i in 2:19) dat.dhw$tramp[dat.dhw[,i]==options[k,'Rs'] & dat.dhw[,19]==options[k,'Re']] <- 1
+  if(nrow(dat.dhw[dat.dhw$tramp==1,])>3){
+
+    data <- list(n=nrow(dat.dhw),y=dat.dhw$tramp,x=dat.dhw$dhw,x.new=x.new.dhew)
+
+    cl <- makeCluster(2)
+    clusterExport(cl,c('data','initFunc','n.adapt','n.update','n.iter'))
+    out <- clusterEvalQ(cl,{
+      library(rjags)
+      bmod <- jags.model('LogisitcJags_wPPC.R',data=data,inits=initFunc(),n.chains=1,n.adapt=n.adapt)
+      update(bmod,n.iter=n.update)
+      bmod.c <- coda.samples(bmod,variable.names=c('B0','B1','y.new','y.pred','pval.mean','pval.sd')
+                             ,n.iter=n.iter,thin=1)
+      return(as.mcmc(bmod.c))
+    })
+    bmod.c <- mcmc.list(out)
+    stopCluster(cl)
+ 
+    gel.out.dhw[k,'B0'] <- gelman.diag(bmod.c[,'B0'])$psrf[1]
+    gel.out.dhw[k,'B1'] <- gelman.diag(bmod.c[,'B1'])$psrf[1]
+
+    ppc.out.dhw[k,'mean'] <- summary(bmod.c)$statistics['pval.mean','Mean']
+    ppc.out.dhw[k,'sd'] <- summary(bmod.c)$statistics['pval.sd','Mean']
+
+    grepgo <- grep('y.pred',colnames(bmod.c[[1]]))
+    polygon(c(x.new.dhew,rev(x.new.dhew)),c(summary(bmod.c)$quantiles[grepgo,'97.5%'],rev(summary(bmod.c)$quantiles[grepgo,'2.5%'])),col=col.vec[2],border=NA)
+    points(x.new.dhew,summary(bmod.c)$quantiles[grepgo,'50%'],pch=19,type="l",lwd=2,lty=2)
+  }
+}
+mtext("Probability Transition",side=2,outer=T,line=0.75,cex=1.2)
+mtext("Driver",side=1,outer=T,line=0.9,cex=1.2)
+
+mtext('1',side=2,outer=T,line=2.75,cex=1.2,at=0.9)
+mtext('1',side=3,outer=T,line=0.5,cex=1.2,at=0.1)
+
+mtext('2',side=2,outer=T,line=2.75,cex=1.2,at=0.7)
+mtext('2',side=3,outer=T,line=0.5,cex=1.2,at=0.3)
+
+mtext('3',side=2,outer=T,line=2.75,cex=1.2,at=0.5)
+mtext('3',side=3,outer=T,line=0.5,cex=1.2,at=0.5)
+
+mtext('4',side=2,outer=T,line=2.75,cex=1.2,at=0.3)
+mtext('4',side=3,outer=T,line=0.5,cex=1.2,at=0.7)
+
+mtext('5',side=2,outer=T,line=2.75,cex=1.2,at=0.1)
+mtext('5',side=3,outer=T,line=0.5,cex=1.2,at=0.9)
+
+mtext(expression('Regime'['t']),side=2,outer=T,line=4.5,cex=1.3)
+mtext(expression('Regime'['t+1']),side=3,outer=T,line=2,cex=1.3)
+
+par(new=T,fig=c(0,1,0,1),oma=c(0,0,0,0),mar=c(0,0,0,0))
+par(xpd=T)
+legend(0.96,1,legend=c("Human Pop","DHW"),pch=22,pt.bg=col.vec[c(1,2)],bty="n",cex=1.7,pt.cex=2.5)
+# export model results
+# write.csv(gel.out.hpop, file.path(getwd(),'outputs',"gel_hpop.csv"), row.names=F)
+# write.csv(ppc.out.hpop, file.path(getwd(),'outputs',"ppc_hpop.csv"), row.names=F)
+# write.csv(gel.out.dhw, file.path(getwd(),'outputs',"gel_dhw.csv"), row.names=F)
+# write.csv(ppc.out.dhw, file.path(getwd(),'outputs',"ppc_dhw.csv"), row.names=F)
+```
+
