@@ -3,13 +3,13 @@ This repository includes data and analysis scripts to accompany:
 # Combining fish and benthic communities into multiple regimes reveals complex reef dynamics
 
 ### Author of analysis and code: Mary K Donovan
-### Journal: Scientific reports (in review)
+### Journal: Scientific Reports (in review)
 ### Link: tbd
 
 -----
 
 ### Description:
-This work analyses reef community composition in terms of fish and benthic functional groups to define distinct reef regimes. Analyses include defining regimes, and studying patterns among and within regimes. Additionally, data from timeseries are used to examine patterns of transitions among regimes, as well as the relationship between regime transitions and local and global drivers of reef change.
+This work analyzes reef community composition in terms of fish and benthic functional groups to define distinct reef regimes in Hawai‘i. Analyses include defining regimes, and studying patterns among and within regimes. Additionally, data from timeseries are used to examine patterns of transitions among regimes, as well as the relationship between regime transitions and local and global drivers of reef change.
 
 ### Contents:
 #### Scripts:
@@ -24,4 +24,4 @@ This work analyses reef community composition in terms of fish and benthic funct
 
 
 #### Output:
-* **output/:** Directory containing the figures and tables produced by the analysis scripts and presented in the manuscript and the Supplement.
+* **outputs/:** Directory containing the figures and tables produced by the analysis scripts and presented in the publication
