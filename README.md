@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/137959410.svg)](https://zenodo.org/badge/137959410.svg)
+
 This repository includes data and analysis scripts to accompany:
 
 # Combining fish and benthic communities into multiple regimes reveals complex reef dynamics
