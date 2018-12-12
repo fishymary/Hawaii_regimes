@@ -5,7 +5,7 @@ This repository includes data and analysis scripts to accompany:
 # Combining fish and benthic communities into multiple regimes reveals complex reef dynamics
 
 ### Author of analysis and code: Mary K Donovan
-### Journal: Scientific Reports (in press)
+### Journal: Scientific Reports
 ### Link: https://rdcu.be/bbLxl
 
 -----
