@@ -6,7 +6,7 @@ This repository includes data and analysis scripts to accompany:
 
 ### Author of analysis and code: Mary K Donovan
 ### Journal: Scientific Reports (in press)
-### Link: tbd
+### Link: https://rdcu.be/bbLxl
 
 -----
 
@@ -23,3 +23,6 @@ This work analyzes reef community composition in terms of fish and benthic funct
 * **data/Hawaii_regime_timeseries/:** data on 10 reef variables by year used to understand transitions among regimes
 
 * **data/Hawaii_regime_drivers.csv/:** data on human population density and degree heating weeks used to ivestigate drivers of regime transitions
+
+Data can also be accessed and cited on Dryad: 
+Donovan MK, Friedlander AM, Lecky J, Jouffray J, Williams GJ, Wedding LM, Crowder LB, Erickson AL, Graham NAJ, Gove JM, Kappel CV, Karr K, Kittinger JN, Norström AV, Nyström M, Oleson KLL, Stamoulis KA, White C, Williams ID, Selkoe KA (2018) Data from: Combining fish and benthic communities into multiple regimes reveals complex reef dynamics. Dryad Digital Repository. https://doi.org/10.5061/dryad.rj083bv
