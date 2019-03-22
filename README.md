@@ -1,4 +1,4 @@
-[![DOI](https://zenodo.org/badge/137959410.svg)](https://zenodo.org/badge/latestdoi/137959410)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1293045.svg)](https://doi.org/10.5281/zenodo.1293045)
 
 This repository includes data and analysis scripts to accompany:
 
